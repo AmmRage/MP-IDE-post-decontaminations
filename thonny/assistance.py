@@ -26,7 +26,7 @@ from thonny.common import (
 )
 from thonny.languages import tr
 from thonny.misc_utils import levenshtein_damerau_distance, running_on_mac_os
-from thonny.ui_utils import CommonDialog, get_hyperlink_cursor, scrollbar_style
+from thonny.ui_utils import CommonDialog, get_hyperlink_cursor
 
 logger = getLogger(__name__)
 
@@ -43,8 +43,6 @@ class AssistantView(tktextext.TextFrame):
             self,
             master,
             text_class=AssistantRstText,
-            vertical_scrollbar_style=scrollbar_style("Vertical"),
-            horizontal_scrollbar_style=scrollbar_style("Horizontal"),
             horizontal_scrollbar_class=ui_utils.AutoScrollbar,
             read_only=True,
             wrap="word",
@@ -303,8 +301,8 @@ class AssistantView(tktextext.TextFrame):
                     ("em",),
                 )
 
-        if self.text.get("1.0", "end").strip():
-            self._append_feedback_link()
+        # if self.text.get("1.0", "end").strip():
+        #    self._append_feedback_link()
 
         if self._exception_info:
             self._append_text(
@@ -627,8 +625,6 @@ class FeedbackDialog(CommonDialog):
         comments_label.grid(row=6, column=0, columnspan=3, sticky="nw", padx=padx, pady=(15, 0))
         self.comments_text_frame = tktextext.TextFrame(
             main_frame,
-            vertical_scrollbar_style=scrollbar_style("Vertical"),
-            horizontal_scrollbar_style=scrollbar_style("Horizontal"),
             horizontal_scrollbar_class=ui_utils.AutoScrollbar,
             wrap="word",
             font="TkDefaultFont",

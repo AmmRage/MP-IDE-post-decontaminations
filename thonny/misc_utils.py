@@ -9,13 +9,33 @@ import sys
 import threading
 import time
 from logging import getLogger
-from typing import Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
 PASSWORD_METHOD = "password"
 PUBLIC_KEY_NO_PASS_METHOD = "public-key (without passphrase)"
 PUBLIC_KEY_WITH_PASS_METHOD = "public-key (with passphrase)"
 
 logger = getLogger(__name__)
+
+
+def get_known_folder(ID):
+    # http://stackoverflow.com/a/3859336/261181
+    # http://www.installmate.com/support/im9/using/symbols/functions/csidls.htm
+    import ctypes.wintypes
+
+    SHGFP_TYPE_CURRENT = 0
+    buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+    ctypes.windll.shell32.SHGetFolderPathW(0, ID, 0, SHGFP_TYPE_CURRENT, buf)
+    assert buf.value
+    return buf.value
+
+
+def get_roaming_appdata_dir():
+    return get_known_folder(26)
+
+
+def get_local_appdata_dir():
+    return get_known_folder(28)
 
 
 def delete_dir_try_hard(path: str, hardness: int = 5) -> None:
@@ -548,3 +568,29 @@ def get_menu_char():
         return "≡"  # Identical to
     else:
         return "☰"  # Trigram for heaven, too heavy on Windows
+
+
+def download_bytes(url: str, timeout: int = 10) -> bytes:
+    from urllib.request import Request, urlopen
+
+    req = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+            "Accept-Encoding": "gzip, deflate",
+            "Cache-Control": "no-cache",
+        },
+    )
+    with urlopen(req, timeout=timeout) as fp:
+        if fp.info().get("Content-Encoding") == "gzip":
+            import gzip
+
+            return gzip.decompress(fp.read())
+        else:
+            return fp.read()
+
+
+def download_and_parse_json(url: str, timeout: int = 10) -> Any:
+    import json
+
+    return json.loads(download_bytes(url, timeout=timeout))

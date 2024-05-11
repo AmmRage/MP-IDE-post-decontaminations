@@ -1,3 +1,7 @@
+"""
+Downloads: https://adafruit-circuit-python.s3.amazonaws.com/index.html?prefix=bin/
+"""
+
 from html.parser import HTMLParser
 from typing import Dict
 
@@ -11,13 +15,15 @@ from update_variants_common import get_attr_value, save_variants
 
 base_url = "https://circuitpython.org/downloads"
 
-PREV_RELEVANT_VERSION = "8.0.5"
+PREV_RELEVANT_VERSION = "8.2.10"
 RELEVANT_FAMILIES = {
     "atmel-samd",
     "esp32",
     "esp32s2",
     "esp32s3",
     "esp32c3",
+    "esp32c6",
+    "esp32h2",
     "nrf52840",
     "raspberrypi",
 }
@@ -106,6 +112,14 @@ print(f"Got {len(all_variants)} variants")
 for variant in cant_determine_samd:
     print("Could not determine SAMD variant for", variant)
 
+for variant in all_variants:
+    # https://github.com/thonny/thonny/discussions/3181
+    if variant["model"] == "EDU PICO for Pico W":
+        variant["downloads"].append({
+                "version": "9.0.0-beta.2",
+                "url": "https://downloads.circuitpython.org/bin/cytron_edu_pico_w/en_US/adafruit-circuitpython-cytron_edu_pico_w-en_US-9.0.0-beta.2.uf2"
+            })
+
 save_variants(
     all_variants,
     ["uf2"],
@@ -123,7 +137,7 @@ save_variants(
 save_variants(
     all_variants,
     ["bin"],
-    {"esp32", "esp32s2", "esp32s3", "esp32c3"},
+    {"esp32", "esp32s2", "esp32s3", "esp32c3", "esp32c6", "esp32h2"},
     "circuitpython-variants-esptool.json",
 )
 

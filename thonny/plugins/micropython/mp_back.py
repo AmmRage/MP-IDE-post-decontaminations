@@ -114,11 +114,6 @@ logger = getLogger(__name__)
 
 class MicroPythonBackend(MainBackend, ABC):
     def __init__(self, clean, args):
-        # Make pipkin available
-        sys.path.insert(
-            0,
-            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "vendored_libs")),
-        )
         logger.info("Initializing MicroPythonBackend of type %s", type(self).__name__)
         self._connection: MicroPythonConnection
         self._args = args
@@ -201,7 +196,7 @@ class MicroPythonBackend(MainBackend, ABC):
             self._validate_time()
 
     def _check_perform_just_in_case_gc(self):
-        if self._using_microbit_micropython():
+        if self._using_simplified_micropython():
             # May fail to allocate memory without this
             self._perform_gc()
 
@@ -358,12 +353,14 @@ class MicroPythonBackend(MainBackend, ABC):
     def _check_for_connection_error(self) -> None:
         self.get_connection().check_for_error()
 
-    def _using_microbit_micropython(self):
+    def _using_simplified_micropython(self):
         if not self._welcome_text:
             return None
 
         # Don't confuse MicroPython and CircuitPython
-        return "micro:bit" in self._welcome_text.lower() and "MicroPython" in self._welcome_text
+        return (
+            "micro:bit" in self._welcome_text.lower() or "calliope" in self._welcome_text.lower()
+        ) and "MicroPython" in self._welcome_text
 
     def _connected_to_pyboard(self):
         if not self._welcome_text:
@@ -399,7 +396,7 @@ class MicroPythonBackend(MainBackend, ABC):
             return self._evaluate("__thonny_helper.sys.path")
 
     def _fetch_epoch_year(self):
-        if self._using_microbit_micropython():
+        if self._using_simplified_micropython():
             return None
 
         if self._connected_to_circuitpython() and "rtc" not in self._builtin_modules:
@@ -439,7 +436,7 @@ class MicroPythonBackend(MainBackend, ABC):
             return result
 
     def _update_cwd(self):
-        if not self._using_microbit_micropython():
+        if not self._using_simplified_micropython():
             logger.debug("Updating cwd")
             self._cwd = self._evaluate("__thonny_helper.getcwd()")
 
@@ -1007,8 +1004,7 @@ class MicroPythonBackend(MainBackend, ABC):
         self._execute_without_output("__thonny_helper.os.mkdir(%r)" % path)
 
     @abstractmethod
-    def _create_pipkin_adapter(self):
-        ...
+    def _create_pipkin_adapter(self): ...
 
     def _perform_pipkin_operation_and_list(self, command: Optional[str], **kwargs) -> Set[DistInfo]:
         import pipkin.common
@@ -1324,12 +1320,7 @@ class MicroPythonBackend(MainBackend, ABC):
             return source
 
     def _mark_nodes_to_be_guarded_from_instrumentation(self, node, guarded_context):
-        if (
-            not guarded_context
-            and isinstance(node, ast.FunctionDef)
-            and node.decorator_list
-            and any(self._is_asm_pio_decorator(decorator) for decorator in node.decorator_list)
-        ):
+        if not guarded_context and isinstance(node, ast.FunctionDef):
             guarded_context = True
 
         node.guarded = guarded_context

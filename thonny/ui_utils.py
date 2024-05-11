@@ -10,14 +10,15 @@ import time
 import tkinter as tk
 import tkinter.font
 import traceback
+from _tkinter import TclError
+from abc import ABC, abstractmethod
 from logging import getLogger
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union  # @UnusedImport
-
-from _tkinter import TclError
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union  # @UnusedImport
 
 from thonny import get_workbench, misc_utils, tktextext
 from thonny.common import TextRange
+from thonny.custom_notebook import CustomNotebook, CustomNotebookPage, CustomNotebookTab
 from thonny.languages import get_button_padding, tr
 from thonny.misc_utils import (
     running_on_linux,
@@ -32,14 +33,134 @@ PARENS_REGEX = re.compile(r"[\(\)\{\}\[\]]")
 logger = getLogger(__name__)
 
 
+class CustomToolbutton(tk.Frame):
+    def __init__(
+        self,
+        master,
+        command: Callable = None,
+        style: Optional[str] = None,
+        image=None,
+        state="normal",
+        text=None,
+        compound=None,
+        width=None,
+        pad=None,
+        font=None,
+        background=None,
+        borderwidth=0,
+    ):
+        if isinstance(image, (list, tuple)):
+            self.normal_image = image[0]
+            self.disabled_image = image[-1]
+        else:
+            self.normal_image = image
+            self.disabled_image = image
+
+        self.state = state
+        self.style = style
+        style_conf = get_style_configuration("CustomToolbutton")
+        if self.style:
+            style_conf |= get_style_configuration(self.style)
+        self.normal_background = background or style_conf["background"]
+        self.hover_background = style_conf["activebackground"]
+
+        if state == "disabled":
+            self.current_image = self.disabled_image
+        else:
+            self.current_image = self.normal_image
+
+        super().__init__(
+            master, background=self.normal_background, borderwidth=borderwidth, relief="solid"
+        )
+        kw = {}
+        if font is not None:
+            kw["font"] = font
+
+        self.label = tk.Label(
+            self,
+            image=self.current_image,
+            text=text,
+            compound=compound,
+            width=None if width is None else ems_to_pixels(width - 1),
+            background=self.normal_background,
+            **kw,
+        )
+
+        # TODO: introduce padx and pady arguments
+        if isinstance(pad, int):
+            padx = pad
+            pady = pad
+        elif isinstance(pad, (tuple, list)):
+            assert len(pad) == 2
+            # TODO: how to use it?
+            padx = pad
+            pady = 0
+        else:
+            padx = None
+            pady = None
+
+        if text and not image:
+            # text only button content needs adjustment
+            pady = pady or 0
+            pady = (pady, pady + ems_to_pixels(0.23))
+
+        self.label.grid(row=0, column=0, padx=padx, pady=pady, sticky="nsew")
+        self.command = command
+        self.bind("<1>", self.on_click, True)
+        self.label.bind("<1>", self.on_click, True)
+        self.bind("<Enter>", self.on_enter, True)
+        self.bind("<Leave>", self.on_leave, True)
+
+    def cget(self, key: str) -> Any:
+        if key in ["text", "image"]:
+            return self.label.cget(key)
+        else:
+            return super().cget(key)
+
+    def on_click(self, event):
+        if self.state == "normal":
+            self.command()
+
+    def on_enter(self, event):
+        if self.state == "normal":
+            super().configure(background=self.hover_background)
+            self.label.configure(background=self.hover_background)
+
+    def on_leave(self, event):
+        super().configure(background=self.normal_background)
+        self.label.configure(background=self.normal_background)
+
+    def configure(self, cnf={}, state=None, image=None, command=None, **kw):
+        if command:
+            self.command = command
+
+        if "state" in cnf and not state:
+            state = cnf.get("state")
+        elif not state:
+            state = "normal"
+
+        self.state = state
+        if image:
+            self.current_image = image
+        elif self.state == "disabled":
+            self.current_image = self.disabled_image
+        else:
+            self.current_image = self.normal_image
+
+        # tkinter.Frame should be always state=normal as it won't display the image if "disabled"
+        # at least on mac with Tk 8.6.13
+        self.label.configure(cnf, image=self.current_image, state="normal", **kw)
+
+
 class CommonDialog(tk.Toplevel):
     def __init__(self, master=None, skip_tk_dialog_attributes=False, **kw):
         assert master
         super().__init__(master=master, class_="Thonny", **kw)
         self.withdraw()  # remain invisible until size calculations are done
 
-        # TODO: Is it still required ?
-        # self.bind("<FocusIn>", self._unlock_on_focus_in, True)
+        # Opening a dialog and minimizing everything with Win-D in Windows makes the main
+        # window and dialog stuck. This is a work-around.
+        self.bind("<FocusIn>", self._unlock_on_focus_in, True)
 
         if not skip_tk_dialog_attributes:
             # https://bugs.python.org/issue43655
@@ -80,6 +201,7 @@ class CommonDialog(tk.Toplevel):
                 ttk.Treeview,
                 tk.Text,
                 ttk.Notebook,
+                CustomNotebook,
                 ttk.Button,
                 tk.Listbox,
             ),
@@ -331,7 +453,7 @@ class AutomaticPanedWindow(tk.PanedWindow):
         self.unbind("<<ThemeChanged>>", self._update_appearance_binding)
         tk.PanedWindow.destroy(self)
 
-    def is_visible(self):
+    def _is_visible(self):
         if not isinstance(self.master, AutomaticPanedWindow):
             return self.winfo_ismapped()
         else:
@@ -460,282 +582,78 @@ class AutomaticPanedWindow(tk.PanedWindow):
         if not isinstance(self.master, AutomaticPanedWindow):
             return
 
-        if len(self.panes()) == 0 and self.is_visible():
+        if len(self.panes()) == 0 and self._is_visible():
             self.master.forget(self)
 
-        if len(self.panes()) > 0 and not self.is_visible():
+        if len(self.panes()) > 0 and not self._is_visible():
             self.master.insert("auto", self)
 
     def _update_appearance(self, event=None):
         self.configure(sashwidth=lookup_style_option("Sash", "sashthickness", ems_to_pixels(0.6)))
-        self.configure(background=lookup_style_option("TPanedWindow", "background"))
+        self.configure(background=lookup_style_option(".", "background"))
 
 
-class ClosableNotebook(ttk.Notebook):
-    def __init__(self, master, style="ButtonNotebook.TNotebook", **kw):
-        super().__init__(master, style=style, **kw)
-
-        self.tab_menu = self.create_tab_menu()
-        self._popup_index = None
-        self.pressed_index = None
-
-        self.bind("<ButtonPress-1>", self._letf_btn_press, True)
-        self.bind("<ButtonRelease-1>", self._left_btn_release, True)
-        if running_on_mac_os():
-            self.bind("<ButtonPress-2>", self._right_btn_press, True)
-            self.bind("<Control-Button-1>", self._right_btn_press, True)
-            self.bind("<ButtonPress-3>", self._middle_btn_press, True)
-        else:
-            self.bind("<ButtonPress-3>", self._right_btn_press, True)
-            self.bind("<ButtonPress-2>", self._middle_btn_press, True)
-
-        # self._check_update_style()
-
-    def create_tab_menu(self):
-        menu = tk.Menu(self.winfo_toplevel(), tearoff=False, **get_style_configuration("Menu"))
-        menu.add_command(label=tr("Close"), command=self._close_tab_from_menu)
-        menu.add_command(label=tr("Close others"), command=self._close_other_tabs)
-        menu.add_command(label=tr("Close all"), command=self.close_tabs)
-        return menu
-
-    def _letf_btn_press(self, event):
-        try:
-            elem = self.identify(event.x, event.y)
-            index = self.index("@%d,%d" % (event.x, event.y))
-
-            if "closebutton" in elem:
-                self.state(["pressed"])
-                self.pressed_index = index
-        except Exception:
-            # may fail, if clicked outside of tab
-            return
-
-    def _left_btn_release(self, event):
-        if not self.instate(["pressed"]):
-            return
-
-        try:
-            elem = self.identify(event.x, event.y)
-            index = self.index("@%d,%d" % (event.x, event.y))
-        except Exception:
-            # may fail, when mouse is dragged
-            return
-        else:
-            if "closebutton" in elem and self.pressed_index == index:
-                self.close_tab(index)
-
-            self.state(["!pressed"])
-        finally:
-            self.pressed_index = None
-
-    def _right_btn_press(self, event):
-        try:
-            index = self.index("@%d,%d" % (event.x, event.y))
-            self._popup_index = index
-            self.tab_menu.tk_popup(*self.winfo_toplevel().winfo_pointerxy())
-        except Exception:
-            logger.exception("Opening tab menu")
-
-    def _middle_btn_press(self, event):
-        try:
-            index = self.index("@%d,%d" % (event.x, event.y))
-            self.close_tab(index)
-
-        except Exception:
-            logger.exception("Middle click on tab")
-
-    def _close_tab_from_menu(self):
-        self.close_tab(self._popup_index)
-
-    def _close_other_tabs(self):
-        self.close_tabs(except_index=self._popup_index)
-
-    def close_tabs(self, except_index=None):
-        for tab_index in reversed(range(len(self.winfo_children()))):
-            if except_index is not None and tab_index == except_index:
-                continue
-            else:
-                self.close_tab(tab_index)
-
-    def close_tab(self, index):
-        child = self.get_child_by_index(index)
-        if hasattr(child, "close"):
-            child.close()
-        else:
-            self.forget(index)
-            child.destroy()
-
-    def get_child_by_index(self, index):
-        tab_id = self.tabs()[index]
-        if tab_id:
-            return self.nametowidget(tab_id)
-        else:
-            return None
-
-    def get_current_child(self):
-        child_id = self.select()
-        if child_id:
-            return self.nametowidget(child_id)
-        else:
-            return None
-
-    def focus_set(self):
-        editor = self.get_current_child()
-        if editor:
-            editor.focus_set()
-        else:
-            super().focus_set()
-
-    def _check_update_style(self):
-        style = ttk.Style()
-        if "closebutton" in style.element_names():
-            # It's done already
-            return
-
-        # respect if required images have been defined already
-        if "img_close" not in self.image_names():
-            img_dir = os.path.join(os.path.dirname(__file__), "res")
-            ClosableNotebook._close_img = tk.PhotoImage(
-                "img_tab_close", file=os.path.join(img_dir, "tab_close.gif")
-            )
-            ClosableNotebook._close_active_img = tk.PhotoImage(
-                "img_tab_close_active", file=os.path.join(img_dir, "tab_close_active.gif")
-            )
-
-        style.element_create(
-            "closebutton",
-            "image",
-            "img_tab_close",
-            ("active", "pressed", "!disabled", "img_tab_close_active"),
-            ("active", "!disabled", "img_tab_close_active"),
-            border=8,
-            sticky="",
-        )
-
-        style.layout(
-            "ButtonNotebook.TNotebook.Tab",
-            [
-                (
-                    "Notebook.tab",
-                    {
-                        "sticky": "nswe",
-                        "children": [
-                            (
-                                "Notebook.padding",
-                                {
-                                    "side": "top",
-                                    "sticky": "nswe",
-                                    "children": [
-                                        (
-                                            "Notebook.focus",
-                                            {
-                                                "side": "top",
-                                                "sticky": "nswe",
-                                                "children": [
-                                                    (
-                                                        "Notebook.label",
-                                                        {"side": "left", "sticky": ""},
-                                                    ),
-                                                    (
-                                                        "Notebook.closebutton",
-                                                        {"side": "left", "sticky": ""},
-                                                    ),
-                                                ],
-                                            },
-                                        )
-                                    ],
-                                },
-                            )
-                        ],
-                    },
-                )
-            ],
-        )
-
-    def _check_remove_padding(self, kw):
-        # Windows themes produce 1-pixel padding to the bottom of the pane
-        # Don't know how to get rid of it using themes
-        if "padding" not in kw and ttk.Style().theme_use().lower() in (
-            "windows",
-            "xpnative",
-            "vista",
-        ):
-            kw["padding"] = (0, 0, 0, -1)
-
-    def add(self, child, **kw):
-        self._check_remove_padding(kw)
-        super().add(child, **kw)
-
-    def insert(self, pos, child, **kw):
-        self._check_remove_padding(kw)
-        super().insert(pos, child, **kw)
-
-
-class AutomaticNotebook(ClosableNotebook):
+class AutomaticNotebook(CustomNotebook):
     """
     Enables inserting views according to their position keys.
     Remember its own position key. Automatically updates its visibility.
     """
 
-    def __init__(self, master, position_key, preferred_size_in_pw=None):
+    def __init__(self, master, location_in_workbench, position_key, preferred_size_in_pw=None):
+        self.location_in_workbench = location_in_workbench
         if get_workbench().in_simple_mode():
-            style = "TNotebook"
+            closable = False
         else:
-            style = "ButtonNotebook.TNotebook"
-        super().__init__(master, style=style, padding=0)
+            closable = True
+        super().__init__(master, closable=closable)
         self.position_key = position_key
 
         # should be in the end, so that it can be detected when
         # constructor hasn't completed yet
         self.preferred_size_in_pw = preferred_size_in_pw
 
-    def add(self, child, **kw):
-        super().add(child, **kw)
+    def after_insert(
+        self,
+        pos: Union[int, Literal["end"]],
+        page: CustomNotebookPage,
+        old_notebook: Optional[CustomNotebook],
+    ) -> None:
+        super().after_insert(pos, page, old_notebook)
         self._update_visibility()
+        if old_notebook is None:
+            get_workbench().event_generate("NotebookPageOpened", page=page)
+        else:
+            get_workbench().event_generate(
+                "NotebookPageMoved", page=page, new_notebook=self, old_notebook=old_notebook
+            )
 
-    def insert(self, pos, child, **kw):
-        if pos == "auto":
-            for sibling in map(self.nametowidget, self.tabs()):
-                if (
-                    not hasattr(sibling, "position_key")
-                    or sibling.position_key == None
-                    or sibling.position_key > child.position_key
-                ):
-                    pos = sibling
-                    break
-            else:
-                pos = "end"
-
-        super().insert(pos, child, **kw)
+    def after_forget(
+        self, pos: int, page: CustomNotebookPage, new_notebook: Optional[CustomNotebook]
+    ):
+        # see the comment at after_add_or_insert
+        super().after_forget(pos, page, new_notebook)
         self._update_visibility()
+        if new_notebook is None:
+            get_workbench().event_generate("NotebookPageClosed", page=page)
+        # if there is new_notebook, then Workbench gets its Moved event from it
 
-    def hide(self, tab_id):
-        super().hide(tab_id)
-        self._update_visibility()
-
-    def forget(self, tab_id):
-        if tab_id in self.tabs() or tab_id in self.winfo_children():
-            super().forget(tab_id)
-        self._update_visibility()
-
-    def is_visible(self):
-        return self in self.master.pane_widgets()
-
-    def get_visible_child(self):
-        for child in self.winfo_children():
-            if str(child) == str(self.select()):
-                return child
-
-        return None
+    def _is_visible(self):
+        if not isinstance(self.master, AutomaticPanedWindow):
+            return self.winfo_ismapped()
+        else:
+            return self in self.master.pane_widgets()
 
     def _update_visibility(self):
         if not isinstance(self.master, AutomaticPanedWindow):
             return
-        if len(self.tabs()) == 0 and self.is_visible():
+        if len(self.tabs()) == 0 and self._is_visible():
             self.master.remove(self)
 
-        if len(self.tabs()) > 0 and not self.is_visible():
+        if len(self.tabs()) > 0 and not self._is_visible():
             self.master.insert("auto", self)
+
+    def allows_dragging_to_another_notebook(self) -> bool:
+        return True
 
 
 class TreeFrame(ttk.Frame):
@@ -751,14 +669,17 @@ class TreeFrame(ttk.Frame):
         **tree_kw,
     ):
         ttk.Frame.__init__(self, master, borderwidth=borderwidth, relief=relief)
-        # http://wiki.tcl.tk/44444#pagetoc50f90d9a
-        self.vert_scrollbar = ttk.Scrollbar(
-            self, orient=tk.VERTICAL, style=scrollbar_style("Vertical")
-        )
+        self.vert_scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL)
         if show_scrollbar:
             self.vert_scrollbar.grid(
                 row=0, column=1, sticky=tk.NSEW, rowspan=2 if show_statusbar else 1
             )
+            scrollbar_stripe = check_create_aqua_scrollbar_stripe(self)
+            if scrollbar_stripe is not None:
+                scrollbar_stripe.grid(
+                    row=0, column=1, sticky="nse", rowspan=2 if show_statusbar else 1
+                )
+                scrollbar_stripe.tkraise()
 
         self.tree = ttk.Treeview(
             self,
@@ -769,11 +690,22 @@ class TreeFrame(ttk.Frame):
         )
         self.tree["show"] = "headings"
         self.tree.grid(row=0, column=0, sticky=tk.NSEW)
+        header_stripe = check_create_aqua_header_stripe(self)
+        if header_stripe is not None:
+            header_stripe.grid(row=0, column=0, sticky="new")
+            header_stripe.tkraise()
         self.vert_scrollbar["command"] = self.tree.yview
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self.tree.bind("<<TreeviewSelect>>", self.on_select, "+")
         self.tree.bind("<Double-Button-1>", self.on_double_click, "+")
+        self.tree.bind("<Button-3>", self.on_secondary_click, True)
+        if misc_utils.running_on_mac_os():
+            self.tree.bind("<2>", self.on_secondary_click, True)
+            self.tree.bind("<Control-1>", self.on_secondary_click, True)
+
+        self.context_menu = tk.Menu(self.tree, tearoff=0)
+        self.context_menu.add_command(command=self.on_copy, label="Copy")
 
         self.error_label = ttk.Label(self.tree)
 
@@ -790,6 +722,20 @@ class TreeFrame(ttk.Frame):
     def clear(self):
         self._clear_tree()
 
+    def on_secondary_click(self, event):
+        self.tree.identify_row(event.y)
+        self.context_menu.post(event.x_root, event.y_root)
+
+    def on_copy(self):
+        texts = []
+        for item in self.tree.selection():
+            text = self.tree.item(item, option="text")
+            values = map(str, self.tree.item(item, option="values"))
+            combined = text + "\t" + "\t".join(values)
+            texts.append(combined.strip("\t"))
+        self.clipboard_clear()
+        self.clipboard_append(os.linesep.join(texts))
+
     def on_select(self, event):
         pass
 
@@ -802,16 +748,6 @@ class TreeFrame(ttk.Frame):
 
     def clear_error(self):
         self.error_label.grid_remove()
-
-
-def scrollbar_style(orientation):
-    # In mac ttk.Scrollbar uses native rendering unless style attribute is set
-    # see http://wiki.tcl.tk/44444#pagetoc50f90d9a
-    # Native rendering doesn't look good in dark themes
-    if running_on_mac_os() and get_workbench().uses_dark_ui_theme():
-        return orientation + ".TScrollbar"
-    else:
-        return None
 
 
 def sequence_to_accelerator(sequence):
@@ -870,9 +806,24 @@ def set_zoomed(toplevel, value):
 
 
 class EnhancedTextWithLogging(tktextext.EnhancedText):
-    def __init__(self, master=None, style="Text", tag_current_line=False, cnf={}, **kw):
+    def __init__(
+        self,
+        master,
+        indent_width: int,
+        tab_width: int,
+        style="Text",
+        tag_current_line=False,
+        cnf={},
+        **kw,
+    ):
         super().__init__(
-            master=master, style=style, tag_current_line=tag_current_line, cnf=cnf, **kw
+            master=master,
+            indent_width=indent_width,
+            tab_width=tab_width,
+            style=style,
+            tag_current_line=tag_current_line,
+            cnf=cnf,
+            **kw,
         )
 
         self._last_event_changed_line_count = False
@@ -892,15 +843,16 @@ class EnhancedTextWithLogging(tktextext.EnhancedText):
         trivial_for_coloring, trivial_for_parens = self._is_trivial_edit(
             chars, line_before, line_after
         )
-        get_workbench().event_generate(
-            "TextInsert",
-            index=concrete_index,
-            text=chars,
-            tags=tags,
-            text_widget=self,
-            trivial_for_coloring=trivial_for_coloring,
-            trivial_for_parens=trivial_for_parens,
-        )
+        if not self._suppress_events:
+            get_workbench().event_generate(
+                "TextInsert",
+                index=concrete_index,
+                text=chars,
+                tags=tags,
+                text_widget=self,
+                trivial_for_coloring=trivial_for_coloring,
+                trivial_for_parens=trivial_for_parens,
+            )
         return result
 
     def direct_delete(self, index1, index2=None, **kw):
@@ -927,14 +879,15 @@ class EnhancedTextWithLogging(tktextext.EnhancedText):
             trivial_for_coloring, trivial_for_parens = self._is_trivial_edit(
                 chars, line_before, line_after
             )
-            get_workbench().event_generate(
-                "TextDelete",
-                index1=concrete_index1,
-                index2=concrete_index2,
-                text_widget=self,
-                trivial_for_coloring=trivial_for_coloring,
-                trivial_for_parens=trivial_for_parens,
-            )
+            if not self._suppress_events:
+                get_workbench().event_generate(
+                    "TextDelete",
+                    index1=concrete_index1,
+                    index2=concrete_index2,
+                    text_widget=self,
+                    trivial_for_coloring=trivial_for_coloring,
+                    trivial_for_parens=trivial_for_parens,
+                )
 
     def _is_trivial_edit(self, chars, line_before, line_after):
         # line is taken after edit for insertion and before edit for deletion
@@ -1181,9 +1134,12 @@ class ToolTip:
         self.text = text
         if self.tipwindow or not self.text:
             return
+
+        # x = self.widget.winfo_pointerx() + ems_to_pixels(0)
+        # y = self.widget.winfo_pointery() + ems_to_pixels(0.8)
         x, y, _, cy = self.widget.bbox("insert")
-        x = x + self.widget.winfo_rootx() + 27
-        y = y + cy + self.widget.winfo_rooty() + self.widget.winfo_height() + 2
+        x = x + self.widget.winfo_rootx()
+        y = y + self.widget.winfo_rooty() + self.widget.winfo_height() + ems_to_pixels(0.2)
         self.tipwindow = tw = tk.Toplevel(self.widget)
         if running_on_mac_os():
             try:
@@ -1238,8 +1194,8 @@ def create_tooltip(widget, text, **kw):
     def leave(event):
         toolTip.hidetip()
 
-    widget.bind("<Enter>", enter)
-    widget.bind("<Leave>", leave)
+    widget.bind("<Enter>", enter, True)
+    widget.bind("<Leave>", leave, True)
 
 
 class NoteBox(CommonDialog):
@@ -1421,10 +1377,7 @@ class EnhancedVar(tk.Variable):
         super().__init__(master=master, value=value, name=name)
         self.modified = False
         self.modification_listener = modification_listener
-        if sys.version_info < (3, 6):
-            self.trace("w", self._on_write)
-        else:
-            self.trace_add("write", self._on_write)
+        self.trace_add("write", self._on_write)
 
     def _on_write(self, *args):
         self.modified = True
@@ -2205,7 +2158,9 @@ def handle_mistreated_latin_shortcuts(registry, event):
                     handler()
 
 
-def show_dialog(dlg, master=None, width=None, height=None, modal=True):
+def show_dialog(
+    dlg, master=None, width=None, height=None, left=None, top=None, modal=True, transient=True
+):
     if getattr(dlg, "closed", False):
         return
 
@@ -2217,7 +2172,7 @@ def show_dialog(dlg, master=None, width=None, height=None, modal=True):
     get_workbench().event_generate("WindowFocusOut")
     # following order seems to give most smooth appearance
     old_focused_widget = master.focus_get()
-    if master.winfo_toplevel().winfo_viewable():
+    if transient and master.winfo_toplevel().winfo_viewable():
         dlg.transient(master.winfo_toplevel())
 
     saved_size = get_workbench().get_option(get_size_option_name(dlg))
@@ -2247,19 +2202,20 @@ def show_dialog(dlg, master=None, width=None, height=None, modal=True):
     if hasattr(dlg, "set_initial_focus"):
         dlg.set_initial_focus()
 
-    dlg.wait_window(dlg)
-    dlg.grab_release()
-    master.winfo_toplevel().lift()
-    master.winfo_toplevel().focus_force()
-    master.winfo_toplevel().grab_set()
-    if running_on_mac_os():
-        master.winfo_toplevel().grab_release()
+    if modal:
+        dlg.wait_window(dlg)
+        dlg.grab_release()
+        master.winfo_toplevel().lift()
+        master.winfo_toplevel().focus_force()
+        master.winfo_toplevel().grab_set()
+        if running_on_mac_os():
+            master.winfo_toplevel().grab_release()
 
-    if old_focused_widget is not None:
-        try:
-            old_focused_widget.focus_force()
-        except TclError:
-            pass
+        if old_focused_widget is not None:
+            try:
+                old_focused_widget.focus_force()
+            except TclError:
+                pass
 
 
 def popen_with_ui_thread_callback(*Popen_args, on_completion, poll_delay=0.1, **Popen_kwargs):
@@ -2410,6 +2366,8 @@ def get_size_option_name(window):
 def get_default_basic_theme():
     if running_on_windows():
         return "vista"
+    elif running_on_mac_os():
+        return "aqua"
     else:
         return "clam"
 
@@ -2493,15 +2451,15 @@ def windows_known_extensions_are_hidden() -> bool:
 
 
 class MappingCombobox(ttk.Combobox):
-    def __init__(self, master, mapping=None, **kw):
-        super().__init__(master, **kw)
-
-        if mapping is None:
-            mapping = {}
-
-        self.mapping: Dict[str, Any]
-        self.set_mapping(mapping)
+    def __init__(
+        self, master, mapping: Dict[str, Any], value_variable: Optional[tk.Variable] = None, **kw
+    ):
+        self.mapping = mapping
+        self.value_variable = value_variable
         self.mapping_desc_variable = tk.StringVar(value="")
+
+        super().__init__(master, **kw)
+        self.set_mapping(mapping)
         self.configure(textvariable=self.mapping_desc_variable)
 
         if kw.get("state", None) == "disabled":
@@ -2509,9 +2467,22 @@ class MappingCombobox(ttk.Combobox):
         else:
             self.state(["!disabled", "readonly"])
 
+        self.bind("<<ComboboxSelected>>", self.on_select_value, True)
+
+        if self.value_variable is not None:
+            self.select_value(self.value_variable.get())
+
     def set_mapping(self, mapping: Dict[str, Any]):
         self.mapping = mapping
         self["values"] = list(mapping)
+
+    def add_pair(self, label, value):
+        self.mapping[label] = value
+        self["values"] = list(self.mapping)
+
+    def on_select_value(self, *event):
+        if self.value_variable is not None:
+            self.value_variable.set(self.get_selected_value())
 
     def get_selected_value(self) -> Any:
         desc = self.mapping_desc_variable.get()
@@ -2558,6 +2529,45 @@ class AdvancedLabel(ttk.Label):
                 webbrowser.open(self._url)
 
 
+def os_is_in_dark_mode() -> Optional[bool]:
+    if running_on_mac_os():
+        try:
+            return bool(
+                int(
+                    tk._default_root.eval(
+                        f"tk::unsupported::MacWindowStyle isdark {tk._default_root}"
+                    )
+                )
+            )
+        except Exception:
+            logger.exception("Could not query for dark mode")
+            return None
+
+    return None
+
+
+def check_create_aqua_scrollbar_stripe(master) -> Optional[tk.Frame]:
+    if get_workbench().is_using_aqua_based_theme():
+        # Want to cover a gray stripe on the right edge of the scrollbar.
+        # Not sure if it is good idea to use fixed colors, but no named (light-dark aware) color matches.
+        # Best dynamic alternative is probably systemTextBackgroundColor
+        if os_is_in_dark_mode():
+            stripe_color = "#2d2e31"
+        else:
+            stripe_color = "#fafafa"
+        return tk.Frame(master, width=1, background=stripe_color)
+    else:
+        return None
+
+
+def check_create_aqua_header_stripe(master) -> Optional[tk.Frame]:
+    if get_workbench().is_using_aqua_based_theme():
+        # Want to cover a gray 2px stripe on the top edge of the Treeview header.
+        return tk.Frame(master, height=2, background="systemWindowBackgroundColor")
+    else:
+        return None
+
+
 def open_with_default_app(path):
     if running_on_windows():
         os.startfile(path)
@@ -2565,6 +2575,31 @@ def open_with_default_app(path):
         subprocess.run(["open", path])
     else:
         subprocess.run(["xdg-open", path])
+
+
+def compute_tab_stops(tab_width_in_chars: int, font: tk.font.Font, offset_px=0) -> List[int]:
+    tab_pixels = font.measure("n" * tab_width_in_chars)
+
+    tabs = []
+    if offset_px > 0:
+        tabs.append(offset_px)
+
+    for _ in range(20):
+        offset_px += tab_pixels
+        tabs.append(offset_px)
+
+    return tabs
+
+
+def get_last_grid_row(container: tk.Widget) -> int:
+    return container.grid_size()[1] - 1
+
+
+def create_custom_toolbutton_in_frame(master, borderwidth, bordercolor, **kwargs):
+    frame = tk.Frame(master, background=bordercolor)
+    frame.button = CustomToolbutton(frame, **kwargs)
+    frame.button.grid(pady=borderwidth, padx=borderwidth)
+    return frame
 
 
 if __name__ == "__main__":

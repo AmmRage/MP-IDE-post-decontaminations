@@ -27,6 +27,7 @@ class EditorInfoBox(tk.Toplevel):
         self._target_text_widget: Optional[SyntaxText] = None
 
         get_workbench().bind("<FocusOut>", self._workbench_focus_out, True)
+        get_workbench().get_editor_notebook().bind("<<NotebookTabChanged>>", self.hide, True)
 
         # If the box has received focus, then it may lose it by a messagebox
         # or mouse click on the main window
@@ -354,7 +355,7 @@ def get_text_filename(text: SyntaxText) -> Optional[str]:
     if isinstance(text, ShellText):
         return "<Shell>"
     elif isinstance(text, CodeViewText):
-        editor = getattr(text.master, "home_widget")
+        editor = text.master.master
         if isinstance(editor, Editor):
             return editor.get_filename()
 
