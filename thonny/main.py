@@ -224,3 +224,7 @@ def _parse_arguments_to_dict(raw_args: List[str]) -> Dict[str, Any]:
     # Need to store CWD, because Thonny may be with different cwd by the time of opening the files
     parsed_args["cwd"] = os.getcwd()
     return parsed_args
+
+
+if __name__ == "__main__":
+    sys.exit(run())
